@@ -1,0 +1,102 @@
+#version 300 es
+precision mediump float;
+precision highp int;
+
+uniform highp sampler2D nishitaLUT;
+uniform highp vec2 nishitaDensity;
+uniform highp vec3 sunDir;
+uniform highp float envmapStrength;
+
+in highp vec3 normal;
+out highp vec4 fragColor;
+
+highp vec2 nishita_rsi(highp vec3 r0, highp vec3 rd, highp float sr)
+{
+    highp float a = dot(rd, rd);
+    highp float b = 2.0 * dot(rd, r0);
+    highp float c = dot(r0, r0) - (sr * sr);
+    highp float d = (b * b) - ((4.0 * a) * c);
+    highp vec2 _112;
+    if (d < 0.0)
+    {
+        _112 = vec2(100000.0, -100000.0);
+    }
+    else
+    {
+        _112 = vec2(((-b) - sqrt(d)) / (2.0 * a), ((-b) + sqrt(d)) / (2.0 * a));
+    }
+    return _112;
+}
+
+highp float safe_acos(highp float x)
+{
+    return acos(clamp(x, -1.0, 1.0));
+}
+
+highp vec3 nishita_lookupLUT(highp float height, highp float sunTheta)
+{
+    highp vec2 coords = vec2(sqrt(height * 1.5576324585708789527416229248047e-07), 0.5 + ((0.5 * sign(sunTheta - 1.57079601287841796875)) * sqrt(abs((sunTheta * 0.63661992549896240234375) - 1.0))));
+    return textureLod(nishitaLUT, coords, 0.0).xyz;
+}
+
+highp float rand(highp vec2 co)
+{
+    return fract(sin(dot(co, vec2(12.98980045318603515625, 78.233001708984375))) * 43758.546875);
+}
+
+highp vec3 nishita_atmosphere(highp vec3 r, highp vec3 r0, highp vec3 pSun, highp float rPlanet)
+{
+    highp vec2 p = nishita_rsi(r0, r, 6420000.0);
+    if (p.x > p.y)
+    {
+        return vec3(0.0);
+    }
+    p.y = min(p.y, nishita_rsi(r0, r, rPlanet).x);
+    highp float iStepSize = (p.y - p.x) / 16.0;
+    highp float iTime = 0.0;
+    highp vec3 totalRlh = vec3(0.0);
+    highp vec3 totalMie = vec3(0.0);
+    highp float iOdRlh = 0.0;
+    highp float iOdMie = 0.0;
+    highp float mu = dot(r, pSun);
+    highp float mumu = mu * mu;
+    highp float pRlh = 0.0596831142902374267578125 * (1.0 + mumu);
+    highp float pMie = (0.119366228580474853515625 * (0.422399997711181640625 * (mumu + 1.0))) / (pow(1.577600002288818359375 - ((2.0 * mu) * 0.7599999904632568359375), 1.5) * 2.577600002288818359375);
+    for (int i = 0; i < 16; i++)
+    {
+        highp vec3 iPos = r0 + (r * (iTime + (iStepSize * 0.5)));
+        highp float iHeight = length(iPos) - rPlanet;
+        highp float odStepRlh = (exp((-iHeight) / 8000.0) * nishitaDensity.x) * iStepSize;
+        highp float odStepMie = (exp((-iHeight) / 1200.0) * nishitaDensity.y) * iStepSize;
+        iOdRlh += odStepRlh;
+        iOdMie += odStepMie;
+        highp float sunTheta = safe_acos(dot(normalize(iPos), normalize(pSun)));
+        highp vec3 jAttn = nishita_lookupLUT(iHeight, sunTheta);
+        highp vec3 iAttn = exp(-(vec3(1.9999999494757503271102905273438e-05 * iOdMie) + (vec3(5.5000000429572537541389465332031e-06, 1.2999999853491317480802536010742e-05, 2.2399999579647555947303771972656e-05) * iOdRlh)));
+        highp vec3 attn = iAttn * jAttn;
+        attn *= (0.980000019073486328125 + (rand(r.xy) * 0.039999999105930328369140625));
+        totalRlh += (attn * odStepRlh);
+        totalMie += (attn * odStepMie);
+        iTime += iStepSize;
+    }
+    return (((vec3(5.5000000429572537541389465332031e-06, 1.2999999853491317480802536010742e-05, 2.2399999579647555947303771972656e-05) * pRlh) * totalRlh) + (totalMie * (pMie * 1.9999999494757503271102905273438e-05))) * 22.0;
+}
+
+highp vec3 sun_disk(highp vec3 n, highp vec3 light_dir, highp float disk_size, highp float intensity)
+{
+    highp float dist = distance(n, light_dir) / disk_size;
+    highp float invDist = 1.0 - dist;
+    highp float mu = sqrt(invDist * invDist);
+    highp vec3 limb_darkening = vec3(1.0) - (vec3(1.0) - pow(vec3(mu), vec3(0.397000014781951904296875, 0.5030000209808349609375, 0.652000010013580322265625)));
+    return vec3(1.0) + (limb_darkening * (((1.0 - step(1.0, dist)) * 22.0) * intensity));
+}
+
+void main()
+{
+    highp vec3 n = normalize(normal);
+    highp vec3 pos = -n;
+    highp vec3 SkyTexture_Color_res = nishita_atmosphere(pos, vec3(0.0, 0.0, 6360000.0), sunDir, 6360000.0) * sun_disk(pos, sunDir, 0.0047560040839016437530517578125, 1.0);
+    fragColor = vec4(SkyTexture_Color_res.x, SkyTexture_Color_res.y, SkyTexture_Color_res.z, fragColor.w);
+    fragColor.w = 0.0;
+}
+
